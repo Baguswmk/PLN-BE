@@ -1,0 +1,44 @@
+{
+  "kind": "collectionType",
+  "collectionName": "finishes",
+  "info": {
+    "singularName": "finish",
+    "pluralName": "finishes",
+    "displayName": "Finish",
+    "description": ""
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "date": {
+      "type": "date"
+    },
+    "time": {
+      "type": "time"
+    },
+    "status": {
+      "type": "enumeration",
+      "enum": [
+        "FINISH",
+        "IN_TRANSIT"
+      ]
+    },
+    "duration": {
+      "type": "integer"
+    },
+    "shift": {
+      "type": "string"
+    },
+    "shipment": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::shipment.shipment",
+      "mappedBy": "finish"
+    },
+    "date_shift": {
+      "type": "date"
+    }
+  }
+}

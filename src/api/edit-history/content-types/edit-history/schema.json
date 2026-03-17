@@ -1,0 +1,44 @@
+{
+  "kind": "collectionType",
+  "collectionName": "edit_histories",
+  "info": {
+    "singularName": "edit-history",
+    "pluralName": "edit-histories",
+    "displayName": "Edit History",
+    "description": "Audit log for tracking shipment edits and deletions"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "action": {
+      "type": "enumeration",
+      "enum": [
+        "UPDATE",
+        "DELETE"
+      ],
+      "required": true
+    },
+    "reason": {
+      "type": "text",
+      "required": true
+    },
+    "changes": {
+      "type": "json"
+    },
+    "shipment_id": {
+      "type": "string"
+    },
+    "user": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "plugin::users-permissions.user"
+    },
+    "shipment": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::shipment.shipment"
+    }
+  }
+}

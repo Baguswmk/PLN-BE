@@ -1,0 +1,53 @@
+{
+  "kind": "collectionType",
+  "collectionName": "summaries",
+  "info": {
+    "singularName": "summary",
+    "pluralName": "summaries",
+    "displayName": "Summary"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "date": {
+      "type": "date"
+    },
+    "month": {
+      "type": "integer"
+    },
+    "year": {
+      "type": "integer"
+    },
+    "shift": {
+      "type": "string"
+    },
+    "coal_type": {
+      "type": "enumeration",
+      "enum": [
+        "CRUSHED",
+        "UNCRUSHED",
+        "ALL"
+      ]
+    },
+    "total_shipment": {
+      "type": "integer"
+    },
+    "total_net_weight": {
+      "type": "float"
+    },
+    "total_intransit": {
+      "type": "integer"
+    },
+    "total_finish": {
+      "type": "integer"
+    },
+    "avg_duration": {
+      "type": "float"
+    },
+    "last_updated": {
+      "type": "datetime"
+    }
+  }
+}

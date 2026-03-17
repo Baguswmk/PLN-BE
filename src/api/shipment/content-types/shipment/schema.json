@@ -1,0 +1,65 @@
+{
+  "kind": "collectionType",
+  "collectionName": "shipments",
+  "info": {
+    "singularName": "shipment",
+    "pluralName": "shipments",
+    "displayName": "Shipment",
+    "description": ""
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "no_do": {
+      "type": "string"
+    },
+    "coal_type": {
+      "type": "enumeration",
+      "enum": [
+        "CRUSHED",
+        "UNCRUSHED"
+      ]
+    },
+    "date": {
+      "type": "date"
+    },
+    "loading": {
+      "type": "string"
+    },
+    "dumping": {
+      "type": "string"
+    },
+    "net_weight": {
+      "type": "float"
+    },
+    "hull_no": {
+      "type": "string"
+    },
+    "time": {
+      "type": "time"
+    },
+    "shift": {
+      "type": "string"
+    },
+    "lot": {
+      "type": "string"
+    },
+    "user": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "plugin::users-permissions.user",
+      "mappedBy": "shipment"
+    },
+    "finish": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::finish.finish",
+      "inversedBy": "shipment"
+    },
+    "date_shift": {
+      "type": "date"
+    }
+  }
+}
