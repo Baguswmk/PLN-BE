@@ -43,6 +43,7 @@ module.exports = [
         "http://192.168.1.185:1338",
         "http://192.168.43.188:5173",
         "https://b-trace.rehandling.my.id",
+        "http://coal-tracking.my.id", 
         "http://156.67.220.12:3000",
         "https://btrace.bukitasam.co.id", 
       ],
