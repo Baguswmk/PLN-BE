@@ -60,6 +60,15 @@
     },
     "date_shift": {
       "type": "date"
+    },
+    "seal_no": {
+      "type": "string"
+    },
+    "foto_seal_start": {
+      "type": "media",
+      "multiple": false,
+      "required": false,
+      "allowedTypes": ["images"]
     }
   }
 }

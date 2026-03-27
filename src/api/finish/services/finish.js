@@ -8,6 +8,63 @@ const { createCoreService } = require('@strapi/strapi').factories;
 const { getShiftDetails } = require('../../../utils/shift');
 
 module.exports = createCoreService('api::finish.finish', ({ strapi }) => ({
+
+  // ─────────────────────────────────────────────
+  // ARRIVE (Step 3: DT sampai di lokasi tujuan)
+  // ─────────────────────────────────────────────
+  async arrive(shipmentId, data) {
+    if (!shipmentId) throw new Error('shipment ID wajib diisi');
+
+    const shipment = await strapi.entityService.findOne(
+      'api::shipment.shipment', shipmentId, { populate: ['finish'] }
+    );
+    if (!shipment) throw new Error('Shipment not found');
+    if (!shipment.finish) throw new Error('Finish record not found untuk shipment ini');
+
+    if (shipment.finish.status !== 'IN_TRANSIT') {
+      throw new Error(`Shipment tidak bisa di-arrive. Status saat ini: "${shipment.finish.status}"`);
+    }
+
+    // Opsional: validasi seal_no cocok
+    if (data.seal_no && shipment.seal_no && data.seal_no !== shipment.seal_no) {
+      throw new Error(`seal_no tidak cocok. Diharapkan: "${shipment.seal_no}", diterima: "${data.seal_no}".`);
+    }
+
+    const now = new Date();
+    const sf = getShiftDetails(now);
+
+    const diffMs = now.getTime() - new Date(shipment.createdAt).getTime();
+    const duration = Math.max(0, Math.floor(diffMs / 60000));
+
+    const finishData = {
+      status:     'FINISH',
+      date:       sf.date,
+      time:       sf.time,
+      shift:      sf.shift,
+      date_shift: sf.date_shift,
+      duration,
+    };
+
+    const response = await strapi.entityService.update('api::finish.finish', shipment.finish.id, {
+      data: finishData,
+      populate: '*',
+    });
+
+    // Update summary
+    if (shipment.coal_type) {
+      await strapi.service('api::summary.summary').updateSummary(
+        shipment.date_shift, shipment.shift, shipment.coal_type
+      );
+    }
+
+    return {
+      id: shipment.id,
+      no_do: shipment.no_do,
+      hull_no: shipment.hull_no,
+      finish: response,
+    };
+  },
+
   async customUpdate(id, data, editReason, user) {
     if (!data) throw new Error('Missing data payload');
 

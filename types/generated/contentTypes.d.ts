@@ -427,6 +427,7 @@ export interface ApiFinishFinish extends Schema.CollectionType {
     date: Attribute.Date;
     date_shift: Attribute.Date;
     duration: Attribute.Integer;
+    foto_seal_finish: Attribute.Media<'images'>;
     publishedAt: Attribute.DateTime;
     shift: Attribute.String;
     shipment: Attribute.Relation<
@@ -434,7 +435,7 @@ export interface ApiFinishFinish extends Schema.CollectionType {
       'oneToOne',
       'api::shipment.shipment'
     >;
-    status: Attribute.Enumeration<['FINISH', 'IN_TRANSIT']>;
+    status: Attribute.Enumeration<['FINISH', 'IN_TRANSIT', 'REGISTERED']>;
     time: Attribute.Time;
     updatedAt: Attribute.DateTime;
     updatedBy: Attribute.Relation<
@@ -474,12 +475,14 @@ export interface ApiShipmentShipment extends Schema.CollectionType {
       'oneToOne',
       'api::finish.finish'
     >;
+    foto_seal_start: Attribute.Media<'images'>;
     hull_no: Attribute.String;
     loading: Attribute.String;
     lot: Attribute.String;
     net_weight: Attribute.Float;
     no_do: Attribute.String;
     publishedAt: Attribute.DateTime;
+    seal_no: Attribute.String;
     shift: Attribute.String;
     time: Attribute.Time;
     updatedAt: Attribute.DateTime;

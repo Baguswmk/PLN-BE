@@ -22,7 +22,8 @@
       "type": "enumeration",
       "enum": [
         "FINISH",
-        "IN_TRANSIT"
+        "IN_TRANSIT",
+        "REGISTERED"
       ]
     },
     "duration": {
@@ -39,6 +40,12 @@
     },
     "date_shift": {
       "type": "date"
+    },
+    "foto_seal_finish": {
+      "type": "media",
+      "multiple": false,
+      "required": false,
+      "allowedTypes": ["images"]
     }
   }
 }

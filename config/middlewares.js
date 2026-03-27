@@ -37,7 +37,7 @@ module.exports = [
     config: {
       enabled: true,
       origin: [
-        "http://localhost:5173",
+        "http://localhost:4000",
         "http://localhost:5174",
         "http://192.168.1.83:5173",
         "http://192.168.1.185:1338",

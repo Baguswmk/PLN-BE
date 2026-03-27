@@ -1,6 +1,22 @@
 module.exports = {
   routes: [
     {
+      method: 'POST',
+      path: '/shipments/register',
+      handler: 'shipment.register',
+      config: {
+        auth: false,
+      },
+    },
+    {
+      method: 'POST',
+      path: '/shipments/match-sjb',
+      handler: 'shipment.matchSjb',
+      config: {
+        auth: false,
+      },
+    },
+    {
       method: 'GET',
       path: '/shipments/lots',
       handler: 'shipment.getShipmentLots',

@@ -8,6 +8,44 @@ const { createCoreService } = require('@strapi/strapi').factories;
 const { getShiftDetails } = require('../../../utils/shift');
 const { REVERSE_TRANSPORTIR_CODE, formatYmd, formatMd } = require('../../../utils/constants');
 
+/**
+ * Parse QR Code (no_do) dan extract data: coal_type, loading, net_weight, hull_no
+ */
+function parseQRCode(qr) {
+  const result = {};
+
+  const cType = qr.charAt(5);
+  if (cType === 'C') result.coal_type = 'CRUSHED';
+  else if (cType === 'U') result.coal_type = 'UNCRUSHED';
+
+  const lType = qr.charAt(10);
+  if (lType === 'W') result.loading = 'MTB - STOCK TS WESTHAM';
+  else if (lType === 'E') result.loading = 'MTB - SP Giok Ext';
+  else if (lType === 'L') result.loading = 'MTB - SP Lavender';
+
+  const nwStr = qr.substring(11, 15);
+  const netWeightParsed = parseInt(nwStr, 10);
+  if (!isNaN(netWeightParsed)) {
+    result.net_weight = netWeightParsed / 100;
+  }
+
+  const remainder = qr.substring(15);
+  const match = remainder.match(/^([a-zA-Z]+)(.*)$/);
+  if (match) {
+    const codeChar = match[1].toUpperCase();
+    const angkaAkhir = match[2].substring(0, 5).replace(/[^0-9]/g, '');
+    const transportirPrefix = REVERSE_TRANSPORTIR_CODE[codeChar] || codeChar;
+    result.hull_no = transportirPrefix + angkaAkhir;
+  } else {
+    const transportirCodeChar = qr.charAt(15);
+    const angkaAkhir = qr.substring(16, 21);
+    const transportirPrefix = REVERSE_TRANSPORTIR_CODE[transportirCodeChar] || transportirCodeChar;
+    result.hull_no = transportirPrefix + angkaAkhir;
+  }
+
+  return result;
+}
+
 module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   
   // ─────────────────────────────────────────────
@@ -27,38 +65,10 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
       }
     }
 
-    // ── Parse QR Code dari no_do (≥20 karakter) ──
+    // ── Parse QR Code dari no_do ──
     if (data.no_do) {
-      const qr = data.no_do;
-
-      const cType = qr.charAt(5);
-      if (cType === 'C') data.coal_type = 'CRUSHED';
-      else if (cType === 'U') data.coal_type = 'UNCRUSHED';
-
-      const lType = qr.charAt(10);
-      if (lType === 'W') data.loading = 'MTB - STOCK TS WESTHAM';
-      else if (lType === 'E') data.loading = 'MTB - SP Giok Ext';
-      else if (lType === 'L') data.loading = 'MTB - SP Lavender';
-
-      const nwStr = qr.substring(11, 15);
-      const netWeightParsed = parseInt(nwStr, 10);
-      if (!isNaN(netWeightParsed)) {
-        data.net_weight = netWeightParsed / 100;
-      }
-
-      const remainder = qr.substring(15);
-      const match = remainder.match(/^([a-zA-Z]+)(.*)$/);
-      if (match) {
-        const codeChar = match[1].toUpperCase();
-        const angkaAkhir = match[2].substring(0, 5).replace(/[^0-9]/g, '');
-        const transportirPrefix = REVERSE_TRANSPORTIR_CODE[codeChar] || codeChar;
-        data.hull_no = transportirPrefix + angkaAkhir;
-      } else {
-        const transportirCodeChar = qr.charAt(15);
-        const angkaAkhir = qr.substring(16, 21);
-        const transportirPrefix = REVERSE_TRANSPORTIR_CODE[transportirCodeChar] || transportirCodeChar;
-        data.hull_no = transportirPrefix + angkaAkhir;
-      }
+      const parsed = parseQRCode(data.no_do);
+      Object.assign(data, parsed);
     }
 
     // ── Isi shift & waktu otomatis ───────────────
@@ -94,6 +104,140 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
         response.date_shift || sf.date_shift,
         response.shift      || sf.shift,
         response.coal_type  || data.coal_type,
+      );
+    }
+
+    return response;
+  },
+
+  // ─────────────────────────────────────────────
+  // REGISTER SHIPMENT (Step 1: hull_no + segel + foto)
+  // ─────────────────────────────────────────────
+  async registerShipment(data, user) {
+    if (!data) throw new Error('Missing data payload');
+    if (!data.hull_no) throw new Error('hull_no wajib diisi');
+    if (!data.seal_no) throw new Error('seal_no wajib diisi');
+
+    // Validasi: tidak boleh ada Shipment REGISTERED dengan hull_no sama dalam 6 jam
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    const existingRegistered = await strapi.entityService.findMany('api::shipment.shipment', {
+      filters: {
+        hull_no: data.hull_no,
+        finish: { status: 'REGISTERED' },
+        createdAt: { $gte: sixHoursAgo.toISOString() },
+      },
+      populate: ['finish'],
+      limit: 1,
+    });
+
+    if (existingRegistered && existingRegistered.length > 0) {
+      throw new Error(`DT dengan hull_no "${data.hull_no}" sudah terdaftar dan belum di-match SJB.`);
+    }
+
+    const now = new Date();
+    const sf = getShiftDetails(now);
+
+    const shipmentData = {
+      hull_no:    data.hull_no,
+      seal_no:    data.seal_no,
+      date:       sf.date,
+      time:       sf.time,
+      shift:      sf.shift,
+      date_shift: sf.date_shift,
+      publishedAt: now,
+    };
+
+    if (user) {
+      shipmentData.user = user.id;
+    }
+
+    const response = await strapi.entityService.create('api::shipment.shipment', {
+      data: shipmentData,
+      populate: '*',
+    });
+
+    if (response) {
+      await strapi.entityService.create('api::finish.finish', {
+        data: {
+          status:      'REGISTERED',
+          shipment:    response.id,
+          publishedAt: now,
+        },
+      });
+    }
+
+    return response;
+  },
+
+  // ─────────────────────────────────────────────
+  // MATCH SJB (Step 2: scan SJB → match by hull_no)
+  // ─────────────────────────────────────────────
+  async matchSjb(no_do, user) {
+    if (!no_do) throw new Error('no_do wajib diisi');
+
+    // Validasi duplikat no_do
+    const existingDo = await strapi.entityService.findMany('api::shipment.shipment', {
+      filters: { no_do },
+      limit: 1,
+    });
+    if (existingDo && existingDo.length > 0) {
+      throw new Error(`No DO "${no_do}" sudah terdaftar, tidak bisa dibuat duplikat.`);
+    }
+
+    // Parse hull_no dari QR code
+    const parsed = parseQRCode(no_do);
+    if (!parsed.hull_no) {
+      throw new Error('Gagal parse hull_no dari QR code.');
+    }
+
+    // Cari Shipment REGISTERED dengan hull_no cocok, dalam 6 jam terakhir
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    const candidates = await strapi.entityService.findMany('api::shipment.shipment', {
+      filters: {
+        hull_no: parsed.hull_no,
+        no_do: { $null: true },
+        finish: { status: 'REGISTERED' },
+        createdAt: { $gte: sixHoursAgo.toISOString() },
+      },
+      populate: ['finish'],
+      sort: { createdAt: 'desc' },
+      limit: 1,
+    });
+
+    if (!candidates || candidates.length === 0) {
+      throw new Error(`Tidak ditemukan DT terdaftar dengan hull_no "${parsed.hull_no}" dalam 6 jam terakhir.`);
+    }
+
+    const shipment = candidates[0];
+
+    // Update Shipment dengan data dari SJB
+    const now = new Date();
+    const updateData = {
+      no_do,
+      coal_type:  parsed.coal_type,
+      loading:    parsed.loading,
+      net_weight: parsed.net_weight,
+    };
+
+    const response = await strapi.entityService.update('api::shipment.shipment', shipment.id, {
+      data: updateData,
+      populate: '*',
+    });
+
+    // Update Finish status → IN_TRANSIT
+    if (shipment.finish) {
+      await strapi.entityService.update('api::finish.finish', shipment.finish.id, {
+        data: { status: 'IN_TRANSIT' },
+      });
+    }
+
+    // Update summary
+    const sf = getShiftDetails(now);
+    if (parsed.coal_type) {
+      await strapi.service('api::summary.summary').updateSummary(
+        response.date_shift || sf.date_shift,
+        response.shift || sf.shift,
+        parsed.coal_type,
       );
     }
 

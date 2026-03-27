@@ -9,7 +9,7 @@ const { createCoreController } = require('@strapi/strapi').factories;
 module.exports = createCoreController('api::shipment.shipment', ({ strapi }) => ({
 
   // ─────────────────────────────────────────────
-  // CREATE
+  // CREATE (Flow Lama - backward compatible)
   // ─────────────────────────────────────────────
   async create(ctx) {
     try {
@@ -24,6 +24,67 @@ module.exports = createCoreController('api::shipment.shipment', ({ strapi }) => 
       
     } catch (err) {
       if (err.message.includes('terdaftar')) return ctx.conflict(err.message);
+      return ctx.badRequest(err.message);
+    }
+  },
+
+  // ─────────────────────────────────────────────
+  // REGISTER (Step 1: hull_no + segel + foto)
+  // ─────────────────────────────────────────────
+  async register(ctx) {
+    try {
+      const body = ctx.request.body;
+
+      // Multipart: data bisa di body langsung atau di body.data
+      let data;
+      if (body.data) {
+        data = typeof body.data === 'string' ? JSON.parse(body.data) : body.data;
+      } else {
+        data = { hull_no: body.hull_no, seal_no: body.seal_no };
+      }
+
+      const user = ctx.state.user;
+
+      // Handle foto upload
+      const files = ctx.request.files;
+      let fileData = {};
+      if (files && files['files.foto_seal_start']) {
+        fileData['foto_seal_start'] = files['files.foto_seal_start'];
+      }
+
+      const response = await strapi.service('api::shipment.shipment').registerShipment(data, user);
+
+      // Upload foto jika ada
+      if (Object.keys(fileData).length > 0 && response) {
+        await strapi.entityService.update('api::shipment.shipment', response.id, {
+          data: {},
+          files: fileData,
+        });
+      }
+
+      const finalizedResponse = await this.sanitizeOutput(response, ctx);
+      return this.transformResponse(finalizedResponse);
+    } catch (err) {
+      if (err.message.includes('sudah terdaftar')) return ctx.conflict(err.message);
+      return ctx.badRequest(err.message);
+    }
+  },
+
+  // ─────────────────────────────────────────────
+  // MATCH SJB (Step 2: scan SJB → match by hull_no)
+  // ─────────────────────────────────────────────
+  async matchSjb(ctx) {
+    try {
+      const { data } = ctx.request.body;
+      const no_do = data?.no_do;
+      const user = ctx.state.user;
+
+      const response = await strapi.service('api::shipment.shipment').matchSjb(no_do, user);
+      const finalizedResponse = await this.sanitizeOutput(response, ctx);
+      return this.transformResponse(finalizedResponse);
+    } catch (err) {
+      if (err.message.includes('terdaftar')) return ctx.conflict(err.message);
+      if (err.message.includes('Tidak ditemukan')) return ctx.notFound(err.message);
       return ctx.badRequest(err.message);
     }
   },
