@@ -53,6 +53,18 @@ module.exports = {
       path: '/summaries/analytics-sdj',
       handler: 'shipment.analyticsSdj',
       config: { policies: [] },
+    },
+    {
+      method: 'GET',
+      path: '/shipments/all-rom',
+      handler: 'shipment.getAllRom',
+      config: { policies: [] },
+    },
+    {
+      method: 'GET',
+      path: '/shipments/all-sdj',
+      handler: 'shipment.getAllSdj',
+      config: { policies: [] },
     }
   ]
 };

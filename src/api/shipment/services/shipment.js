@@ -1,12 +1,16 @@
-'use strict';
+"use strict";
 
 /**
  * shipment service
  */
 
-const { createCoreService } = require('@strapi/strapi').factories;
-const { getShiftDetails } = require('../../../utils/shift');
-const { REVERSE_TRANSPORTIR_CODE, formatYmd, formatMd } = require('../../../utils/constants');
+const { createCoreService } = require("@strapi/strapi").factories;
+const { getShiftDetails } = require("../../../utils/shift");
+const {
+  REVERSE_TRANSPORTIR_CODE,
+  formatYmd,
+  formatMd,
+} = require("../../../utils/constants");
 
 /**
  * Parse QR Code (no_do) dan extract data: coal_type, loading, net_weight, hull_no
@@ -14,27 +18,27 @@ const { REVERSE_TRANSPORTIR_CODE, formatYmd, formatMd } = require('../../../util
  */
 function parseQRCode(qr) {
   // ── Validasi input ────────────────────────────────────────────────────────
-  if (!qr || typeof qr !== 'string') {
-    throw new Error('QR code tidak valid: input kosong atau bukan string.');
+  if (!qr || typeof qr !== "string") {
+    throw new Error("QR code tidak valid: input kosong atau bukan string.");
   }
   const trimmed = qr.trim();
+
   if (trimmed.length < 20) {
-    throw new Error(`QR code tidak valid: panjang ${trimmed.length} karakter, minimal 20.`);
-  }
-  if (/\s/.test(trimmed)) {
-    throw new Error('QR code tidak valid: mengandung spasi atau karakter whitespace.');
+    throw new Error(
+      `QR code tidak valid: panjang karakter minimal 20.`
+    );
   }
 
   const result = {};
 
   const cType = trimmed.charAt(5);
-  if (cType === 'C') result.coal_type = 'CRUSHED';
-  else if (cType === 'U') result.coal_type = 'UNCRUSHED';
+  if (cType === "C") result.coal_type = "CRUSHED";
+  else if (cType === "U") result.coal_type = "UNCRUSHED";
 
   const lType = trimmed.charAt(10);
-  if (lType === 'W') result.loading = 'MTB - STOCK TS WESTHAM';
-  else if (lType === 'E') result.loading = 'MTB - SP Giok Ext';
-  else if (lType === 'L') result.loading = 'MTB - SP Lavender';
+  if (lType === "W") result.loading = "MTB - STOCK TS WESTHAM";
+  else if (lType === "E") result.loading = "MTB - SP Giok Ext";
+  else if (lType === "L") result.loading = "MTB - SP Lavender";
 
   const nwStr = trimmed.substring(11, 15);
   const netWeightParsed = parseInt(nwStr, 10);
@@ -42,39 +46,72 @@ function parseQRCode(qr) {
     result.net_weight = netWeightParsed / 100;
   }
 
+  // Bagian sisa setelah net weight: misal "B005   A26A"
   const remainder = trimmed.substring(15);
-  const match = remainder.match(/^([a-zA-Z]+)(.*)$/);
+  
+  // Format target: ([A-Za-z]+)(\d+)(?:\s+([A-Za-z]+)(.*))?
+  // match[1] -> Transportir (contoh: "B" -> "MAI")
+  // match[2] -> No Lambung (contoh: "005")
+  // \s+      -> Spasi sebagai pemisah yang diabaikan (tdk masuk output)
+  // match[3] -> Kode Dumping (contoh: "A" atau "DUMPING A")
+  // match[4] -> Lot (contoh: "26A")
+  const match = remainder.match(/^([a-zA-Z]+)(\d+)(?:\s+([a-zA-Z]+)(.*))?$/);
+  
   if (match) {
     const codeChar = match[1].toUpperCase();
-    const angkaAkhir = match[2].substring(0, 5).replace(/[^0-9]/g, '');
+    const angkaAkhir = match[2];
     const transportirPrefix = REVERSE_TRANSPORTIR_CODE[codeChar] || codeChar;
     result.hull_no = transportirPrefix + angkaAkhir;
+    
+    // clean_no_do = (15 char awal) + transportir + no lambung
+    result.clean_no_do = trimmed.substring(0, 15) + match[1] + match[2];
+    
+    // Simpan dumping dan lot untuk di-assign saat update
+    if (match[3]) {
+      const dumpCode = match[3].toUpperCase();
+      let dumpLocation = dumpCode;
+      if (dumpCode === "A") dumpLocation = "SP Port SDJ";
+      else if (dumpCode === "B") dumpLocation = "KM 107";
+      else if (dumpCode === "C") dumpLocation = "SP KM 36";
+      
+      result.dumping = dumpLocation;
+    }
+    if (match[4]) {
+      result.lot = match[4].trim();
+    }
   } else {
-    const transportirCodeChar = trimmed.charAt(15);
-    const angkaAkhir = trimmed.substring(16, 21);
-    const transportirPrefix = REVERSE_TRANSPORTIR_CODE[transportirCodeChar] || transportirCodeChar;
+    // Fallback lama (jika tidak ada spasi sama sekali tapi format tidak persis di atas)
+    const noSpaces = remainder.replace(/\s+/g, "");
+    const codeChar = noSpaces.charAt(0).toUpperCase();
+    const angkaAkhir = noSpaces.substring(1, 6).replace(/[^0-9]/g, "");
+    const transportirPrefix = REVERSE_TRANSPORTIR_CODE[codeChar] || codeChar;
     result.hull_no = transportirPrefix + angkaAkhir;
+    result.clean_no_do = trimmed.substring(0, 15) + codeChar + angkaAkhir;
   }
 
   return result;
 }
 
-module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
-  
+module.exports = createCoreService("api::shipment.shipment", ({ strapi }) => ({
   // ─────────────────────────────────────────────
   // CREATE
   // ─────────────────────────────────────────────
   async customCreate(data, user) {
-    if (!data) throw new Error('Missing data payload');
+    if (!data) throw new Error("Missing data payload");
 
     // ── Validasi duplikat no_do ──────────────────
     if (data.no_do) {
-      const existing = await strapi.entityService.findMany('api::shipment.shipment', {
-        filters: { no_do: data.no_do },
-        limit: 1,
-      });
+      const existing = await strapi.entityService.findMany(
+        "api::shipment.shipment",
+        {
+          filters: { no_do: data.no_do },
+          limit: 1,
+        }
+      );
       if (existing && existing.length > 0) {
-        throw new Error(`No DO "${data.no_do}" sudah terdaftar, tidak bisa dibuat duplikat.`);
+        throw new Error(
+          `No DO "${data.no_do}" sudah terdaftar, tidak bisa dibuat duplikat.`
+        );
       }
     }
 
@@ -88,9 +125,9 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
     const now = new Date();
     const sf = getShiftDetails(now);
 
-    data.time       = sf.time;
-    data.date       = sf.date;
-    data.shift      = sf.shift;
+    data.time = sf.time;
+    data.date = sf.date;
+    data.shift = sf.shift;
     data.date_shift = sf.date_shift;
 
     if (user) {
@@ -98,26 +135,31 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
     }
 
     // Panggil fungsi create default
-    const response = await strapi.entityService.create('api::shipment.shipment', { data, populate: '*' });
+    const response = await strapi.entityService.create(
+      "api::shipment.shipment",
+      { data, populate: "*" }
+    );
 
     if (response) {
       const shipmentId = response.id;
 
       // ── Buat Finish dengan status IN_TRANSIT ──
-      await strapi.entityService.create('api::finish.finish', {
+      await strapi.entityService.create("api::finish.finish", {
         data: {
-          status:      'IN_TRANSIT',
-          shipment:    shipmentId,
+          status: "IN_TRANSIT",
+          shipment: shipmentId,
           publishedAt: now,
         },
       });
 
       // ── Update summary ────────────────────────
-      await strapi.service('api::summary.summary').updateSummary(
-        response.date_shift || sf.date_shift,
-        response.shift      || sf.shift,
-        response.coal_type  || data.coal_type,
-      );
+      await strapi
+        .service("api::summary.summary")
+        .updateSummary(
+          response.date_shift || sf.date_shift,
+          response.shift || sf.shift,
+          response.coal_type || data.coal_type
+        );
     }
 
     return response;
@@ -127,35 +169,40 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // REGISTER SHIPMENT (Step 1: hull_no + segel + foto)
   // ─────────────────────────────────────────────
   async registerShipment(data, user) {
-    if (!data) throw new Error('Missing data payload');
-    if (!data.hull_no) throw new Error('hull_no wajib diisi');
-    if (!data.seal_no) throw new Error('seal_no wajib diisi');
+    if (!data) throw new Error("Missing data payload");
+    if (!data.hull_no) throw new Error("hull_no wajib diisi");
+    if (!data.seal_no) throw new Error("seal_no wajib diisi");
 
     // Validasi: tidak boleh ada Shipment REGISTERED dengan hull_no sama dalam 6 jam
     const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
-    const existingRegistered = await strapi.entityService.findMany('api::shipment.shipment', {
-      filters: {
-        hull_no: data.hull_no,
-        finish: { status: 'REGISTERED' },
-        createdAt: { $gte: sixHoursAgo.toISOString() },
-      },
-      populate: ['finish'],
-      limit: 1,
-    });
+    const existingRegistered = await strapi.entityService.findMany(
+      "api::shipment.shipment",
+      {
+        filters: {
+          hull_no: data.hull_no,
+          finish: { status: "REGISTERED" },
+          createdAt: { $gte: sixHoursAgo.toISOString() },
+        },
+        populate: ["finish"],
+        limit: 1,
+      }
+    );
 
     if (existingRegistered && existingRegistered.length > 0) {
-      throw new Error(`DT dengan hull_no "${data.hull_no}" sudah terdaftar dan belum di-match SJB.`);
+      throw new Error(
+        `DT dengan hull_no "${data.hull_no}" sudah terdaftar dan belum di-match SJB.`
+      );
     }
 
     const now = new Date();
     const sf = getShiftDetails(now);
 
     const shipmentData = {
-      hull_no:    data.hull_no,
-      seal_no:    data.seal_no,
-      date:       sf.date,
-      time:       sf.time,
-      shift:      sf.shift,
+      hull_no: data.hull_no,
+      seal_no: data.seal_no,
+      date: sf.date,
+      time: sf.time,
+      shift: sf.shift,
       date_shift: sf.date_shift,
       publishedAt: now,
     };
@@ -164,16 +211,19 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
       shipmentData.user = user.id;
     }
 
-    const response = await strapi.entityService.create('api::shipment.shipment', {
-      data: shipmentData,
-      populate: '*',
-    });
+    const response = await strapi.entityService.create(
+      "api::shipment.shipment",
+      {
+        data: shipmentData,
+        populate: "*",
+      }
+    );
 
     if (response) {
-      await strapi.entityService.create('api::finish.finish', {
+      await strapi.entityService.create("api::finish.finish", {
         data: {
-          status:      'REGISTERED',
-          shipment:    response.id,
+          status: "REGISTERED",
+          shipment: response.id,
           publishedAt: now,
         },
       });
@@ -186,72 +236,103 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // MATCH SJB (Step 2: scan SJB → match by hull_no)
   // ─────────────────────────────────────────────
   async matchSjb(no_do, user) {
-    if (!no_do) throw new Error('no_do wajib diisi');
+    if (!no_do) throw new Error("no_do wajib diisi");
 
-    // Validasi duplikat no_do
-    const existingDo = await strapi.entityService.findMany('api::shipment.shipment', {
-      filters: { no_do },
-      limit: 1,
-    });
-    if (existingDo && existingDo.length > 0) {
-      throw new Error(`No DO "${no_do}" sudah terdaftar, tidak bisa dibuat duplikat.`);
-    }
-
-    // Parse hull_no dari QR code
+    // Parse hull_no dari QR code DULUAN agar dapat clean_no_do
     const parsed = parseQRCode(no_do);
     if (!parsed.hull_no) {
-      throw new Error('Gagal parse hull_no dari QR code.');
+      throw new Error("Gagal parse hull_no dari QR code.");
+    }
+
+    const cleanNoDo = parsed.clean_no_do || no_do;
+
+    // Validasi duplikat no_do
+    const existingDo = await strapi.entityService.findMany(
+      "api::shipment.shipment",
+      {
+        filters: { no_do: cleanNoDo },
+        limit: 1,
+      }
+    );
+    if (existingDo && existingDo.length > 0) {
+      throw new Error(
+        `No DO "${cleanNoDo}" sudah terdaftar, tidak bisa dibuat duplikat.`
+      );
     }
 
     // Cari Shipment REGISTERED dengan hull_no cocok, dalam 6 jam terakhir
     const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
-    const candidates = await strapi.entityService.findMany('api::shipment.shipment', {
-      filters: {
-        hull_no: parsed.hull_no,
-        no_do: { $null: true },
-        finish: { status: 'REGISTERED' },
-        createdAt: { $gte: sixHoursAgo.toISOString() },
-      },
-      populate: ['finish'],
-      sort: { createdAt: 'desc' },
-      limit: 1,
-    });
+    const candidates = await strapi.entityService.findMany(
+      "api::shipment.shipment",
+      {
+        filters: {
+          hull_no: parsed.hull_no,
+          no_do: { $null: true },
+          finish: { status: "REGISTERED" },
+          createdAt: { $gte: sixHoursAgo.toISOString() },
+        },
+        populate: ["finish"],
+        sort: { createdAt: "desc" },
+        limit: 1,
+      }
+    );
 
     if (!candidates || candidates.length === 0) {
-      throw new Error(`Tidak ditemukan DT terdaftar dengan hull_no "${parsed.hull_no}" dalam 6 jam terakhir.`);
+      throw new Error(
+        `Tidak ditemukan DT terdaftar dengan hull_no "${parsed.hull_no}" dalam 6 jam terakhir.`
+      );
     }
 
     const shipment = candidates[0];
 
-    // Update Shipment dengan data dari SJB
+    // Update Shipment dengan data dari SJB dan perhitungan Shift yang BARU
     const now = new Date();
+    const currentSf = getShiftDetails(now);
+
     const updateData = {
-      no_do,
-      coal_type:  parsed.coal_type,
-      loading:    parsed.loading,
+      no_do: cleanNoDo,
+      coal_type: parsed.coal_type,
+      loading: parsed.loading,
+      dumping: parsed.dumping,
+      lot: parsed.lot,
       net_weight: parsed.net_weight,
+      // Meng-overwrite date & shift sehingga masuk ke shift saat ditimbang (match)
+      date: currentSf.date,
+      time: currentSf.time,
+      shift: currentSf.shift,
+      date_shift: currentSf.date_shift,
     };
 
-    const response = await strapi.entityService.update('api::shipment.shipment', shipment.id, {
-      data: updateData,
-      populate: '*',
-    });
+    const response = await strapi.entityService.update(
+      "api::shipment.shipment",
+      shipment.id,
+      {
+        data: updateData,
+        populate: "*",
+      }
+    );
 
     // Update Finish status → IN_TRANSIT
     if (shipment.finish) {
-      await strapi.entityService.update('api::finish.finish', shipment.finish.id, {
-        data: { status: 'IN_TRANSIT' },
-      });
+      await strapi.entityService.update(
+        "api::finish.finish",
+        shipment.finish.id,
+        {
+          data: { status: "IN_TRANSIT" },
+        }
+      );
     }
 
     // Update summary
     const sf = getShiftDetails(now);
     if (parsed.coal_type) {
-      await strapi.service('api::summary.summary').updateSummary(
-        response.date_shift || sf.date_shift,
-        response.shift || sf.shift,
-        parsed.coal_type,
-      );
+      await strapi
+        .service("api::summary.summary")
+        .updateSummary(
+          response.date_shift || sf.date_shift,
+          response.shift || sf.shift,
+          parsed.coal_type
+        );
     }
 
     return response;
@@ -261,19 +342,31 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // UPDATE
   // ─────────────────────────────────────────────
   async customUpdate(id, data, editReason, user) {
-    if (!data) throw new Error('Missing data payload');
+    if (!data) throw new Error("Missing data payload");
 
     const existing = await strapi.entityService.findOne(
-      'api::shipment.shipment', id, { populate: ['finish', 'user'] }
+      "api::shipment.shipment",
+      id,
+      { populate: ["finish", "user"] }
     );
-    if (!existing) throw new Error('Shipment not found');
+    if (!existing) throw new Error("Shipment not found");
 
     if (user) {
-      const userWithRole = await strapi.entityService.findOne('plugin::users-permissions.user', user.id, { populate: ['role'] });
-      const isAdmin = userWithRole?.role?.name?.toLowerCase() === 'admin';
-      
-      if (existing.user && String(existing.user.id) !== String(user.id) && !isAdmin) {
-         throw new Error('Forbidden: Anda tidak memiliki hak akses (bukan Admin atau Pembuat) untuk mengubah data ini.');
+      const userWithRole = await strapi.entityService.findOne(
+        "plugin::users-permissions.user",
+        user.id,
+        { populate: ["role"] }
+      );
+      const isAdmin = userWithRole?.role?.name?.toLowerCase() === "admin";
+
+      if (
+        existing.user &&
+        String(existing.user.id) !== String(user.id) &&
+        !isAdmin
+      ) {
+        throw new Error(
+          "Forbidden: Anda tidak memiliki hak akses (bukan Admin atau Pembuat) untuk mengubah data ini."
+        );
       }
     }
 
@@ -281,31 +374,41 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
     if (data.status) {
       let finishData = { status: data.status };
 
-      if (data.status === 'FINISH' && existing.finish?.status === 'IN_TRANSIT') {
+      if (
+        data.status === "FINISH" &&
+        existing.finish?.status === "IN_TRANSIT"
+      ) {
         const now = new Date();
-        const sf  = getShiftDetails(now);
-        finishData.date       = sf.date;
-        finishData.time       = sf.time;
-        finishData.shift      = sf.shift;
+        const sf = getShiftDetails(now);
+        finishData.date = sf.date;
+        finishData.time = sf.time;
+        finishData.shift = sf.shift;
         finishData.date_shift = sf.date_shift;
 
-        const diffMs          = now.getTime() - new Date(existing.createdAt).getTime();
-        finishData.duration   = Math.max(0, Math.floor(diffMs / 60000));
+        const diffMs = now.getTime() - new Date(existing.createdAt).getTime();
+        finishData.duration = Math.max(0, Math.floor(diffMs / 60000));
       }
 
       // Override manual jika dikirim
-      if (data.finish_date)       finishData.date       = data.finish_date;
-      if (data.finish_time)       finishData.time       = data.finish_time;
-      if (data.finish_shift)      finishData.shift      = data.finish_shift;
-      if (data.finish_date_shift) finishData.date_shift = data.finish_date_shift;
-      if (data.finish_duration)   finishData.duration   = data.finish_duration;
+      if (data.finish_date) finishData.date = data.finish_date;
+      if (data.finish_time) finishData.time = data.finish_time;
+      if (data.finish_shift) finishData.shift = data.finish_shift;
+      if (data.finish_date_shift)
+        finishData.date_shift = data.finish_date_shift;
+      if (data.finish_duration) finishData.duration = data.finish_duration;
 
       if (existing.finish) {
-        await strapi.entityService.update('api::finish.finish', existing.finish.id, { data: finishData });
+        await strapi.entityService.update(
+          "api::finish.finish",
+          existing.finish.id,
+          { data: finishData }
+        );
       } else {
-        finishData.shipment    = existing.id;
+        finishData.shipment = existing.id;
         finishData.publishedAt = new Date();
-        await strapi.entityService.create('api::finish.finish', { data: finishData });
+        await strapi.entityService.create("api::finish.finish", {
+          data: finishData,
+        });
       }
 
       // Bersihkan field finish dari payload shipment
@@ -325,17 +428,21 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
       }
     }
 
-    const response = await strapi.entityService.update('api::shipment.shipment', id, { data, populate: '*' });
+    const response = await strapi.entityService.update(
+      "api::shipment.shipment",
+      id,
+      { data, populate: "*" }
+    );
 
     if (Object.keys(changes).length > 0) {
-      await strapi.entityService.create('api::edit-history.edit-history', {
+      await strapi.entityService.create("api::edit-history.edit-history", {
         data: {
-          action:      'UPDATE',
-          reason:      editReason || 'Pembaruan data Shipment',
+          action: "UPDATE",
+          reason: editReason || "Pembaruan data Shipment",
           changes,
           shipment_id: String(id),
-          shipment:    id,
-          user:        user?.id ?? null,
+          shipment: id,
+          user: user?.id ?? null,
         },
       });
     }
@@ -348,10 +455,14 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
 
     for (const ds of dsToUpdate) {
       if (existing.coal_type) {
-        await strapi.service('api::summary.summary').updateSummary(ds, existing.shift, existing.coal_type);
+        await strapi
+          .service("api::summary.summary")
+          .updateSummary(ds, existing.shift, existing.coal_type);
       }
       if (data.coal_type && data.coal_type !== existing.coal_type) {
-        await strapi.service('api::summary.summary').updateSummary(ds, existing.shift, data.coal_type);
+        await strapi
+          .service("api::summary.summary")
+          .updateSummary(ds, existing.shift, data.coal_type);
       }
     }
 
@@ -362,11 +473,14 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // FINISH BY NO DO
   // ─────────────────────────────────────────────
   async finishByNoDo(no_do) {
-    const shipments = await strapi.entityService.findMany('api::shipment.shipment', {
-      filters: { no_do },
-      populate: ['finish'],
-      limit: 1,
-    });
+    const shipments = await strapi.entityService.findMany(
+      "api::shipment.shipment",
+      {
+        filters: { no_do },
+        populate: ["finish"],
+        limit: 1,
+      }
+    );
 
     if (!shipments || shipments.length === 0) {
       throw new Error(`Shipment dengan no_do "${no_do}" tidak ditemukan.`);
@@ -375,48 +489,52 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
     const existing = shipments[0];
 
     // Cek apakah sudah FINISH
-    if (existing.finish?.status === 'FINISH') {
+    if (existing.finish?.status === "FINISH") {
       throw new Error(`Shipment "${no_do}" sudah berstatus FINISH.`);
     }
 
     const now = new Date();
-    const sf  = getShiftDetails(now);
+    const sf = getShiftDetails(now);
 
-    const diffMs   = now.getTime() - new Date(existing.createdAt).getTime();
+    const diffMs = now.getTime() - new Date(existing.createdAt).getTime();
     const duration = Math.max(0, Math.floor(diffMs / 60000));
 
     const finishData = {
-      status:     'FINISH',
-      date:       sf.date,
-      time:       sf.time,
-      shift:      sf.shift,
+      status: "FINISH",
+      date: sf.date,
+      time: sf.time,
+      shift: sf.shift,
       date_shift: sf.date_shift,
       duration,
     };
 
     if (existing.finish) {
-      await strapi.entityService.update('api::finish.finish', existing.finish.id, {
-        data: finishData,
-      });
+      await strapi.entityService.update(
+        "api::finish.finish",
+        existing.finish.id,
+        {
+          data: finishData,
+        }
+      );
     } else {
-      await strapi.entityService.create('api::finish.finish', {
+      await strapi.entityService.create("api::finish.finish", {
         data: {
           ...finishData,
-          shipment:    existing.id,
+          shipment: existing.id,
           publishedAt: now,
         },
       });
     }
 
     if (existing.coal_type) {
-      await strapi.service('api::summary.summary').updateSummary(
-        existing.date_shift, existing.shift, existing.coal_type
-      );
+      await strapi
+        .service("api::summary.summary")
+        .updateSummary(existing.date_shift, existing.shift, existing.coal_type);
     }
 
     return {
-      id:     existing.id,
-      no_do:  existing.no_do,
+      id: existing.id,
+      no_do: existing.no_do,
       finish: finishData,
     };
   },
@@ -426,39 +544,86 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // ─────────────────────────────────────────────
   async customDelete(id, editReason, user) {
     const existing = await strapi.entityService.findOne(
-      'api::shipment.shipment', id, { populate: ['finish', 'user'] }
+      "api::shipment.shipment",
+      id,
+      { populate: ["finish.foto_seal_finish", "user", "foto_seal_start"] }
     );
-    if (!existing) throw new Error('Shipment not found');
+    if (!existing) throw new Error("Shipment not found");
 
     if (user) {
-      const userWithRole = await strapi.entityService.findOne('plugin::users-permissions.user', user.id, { populate: ['role'] });
-      const isAdmin = userWithRole?.role?.name?.toLowerCase() === 'admin';
-      
-      if (existing.user && String(existing.user.id) !== String(user.id) && !isAdmin) {
-         throw new Error('Forbidden: Anda tidak memiliki hak akses (bukan Admin atau Pembuat) untuk menghapus data ini.');
+      const userWithRole = await strapi.entityService.findOne(
+        "plugin::users-permissions.user",
+        user.id,
+        { populate: ["role"] }
+      );
+      const isAdmin = userWithRole?.role?.name?.toLowerCase() === "admin";
+
+      if (
+        existing.user &&
+        String(existing.user.id) !== String(user.id) &&
+        !isAdmin
+      ) {
+        throw new Error(
+          "Forbidden: Anda tidak memiliki hak akses (bukan Admin atau Pembuat) untuk menghapus data ini."
+        );
       }
     }
 
-    const response = await strapi.entityService.delete('api::shipment.shipment', id);
+    const response = await strapi.entityService.delete(
+      "api::shipment.shipment",
+      id
+    );
 
     if (existing.finish) {
-      await strapi.entityService.delete('api::finish.finish', existing.finish.id);
+      await strapi.entityService.delete(
+        "api::finish.finish",
+        existing.finish.id
+      );
     }
 
-    await strapi.entityService.create('api::edit-history.edit-history', {
+    // Hapus file foto fisik secara background agar tidak membebani response time
+    (async () => {
+      try {
+        const uploadService = strapi.plugin("upload").service("upload");
+        if (existing.foto_seal_start?.id) {
+          await uploadService.remove(existing.foto_seal_start);
+        }
+        if (existing.finish?.foto_seal_finish?.id) {
+          await uploadService.remove(existing.finish.foto_seal_finish);
+        }
+      } catch (err) {
+        console.error("Failed to delete associated photos:", err);
+      }
+    })();
+
+    await strapi.entityService.create("api::edit-history.edit-history", {
       data: {
-        action:      'DELETE',
-        reason:      editReason || 'Penghapusan data Shipment',
-        changes:     { deleted_data: { no_do: existing.no_do, lot: existing.lot, date_shift: existing.date_shift } },
+        action: "DELETE",
+        reason: editReason || "Penghapusan data Shipment",
+        changes: {
+          deleted_data: {
+            no_do: existing.no_do,
+            lot: existing.lot,
+            date_shift: existing.date_shift,
+          },
+        },
         shipment_id: String(id),
-        user:        user?.id ?? null,
+        user: user?.id ?? null,
       },
     });
 
     if (existing.date_shift && existing.shift) {
-      await strapi.service('api::summary.summary').updateSummary(existing.date_shift, existing.shift, 'ALL');
+      await strapi
+        .service("api::summary.summary")
+        .updateSummary(existing.date_shift, existing.shift, "ALL");
       if (existing.coal_type) {
-        await strapi.service('api::summary.summary').updateSummary(existing.date_shift, existing.shift, existing.coal_type);
+        await strapi
+          .service("api::summary.summary")
+          .updateSummary(
+            existing.date_shift,
+            existing.shift,
+            existing.coal_type
+          );
       }
     }
 
@@ -469,12 +634,12 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // GET SHIPMENT LOTS
   // ─────────────────────────────────────────────
   async getShipmentLots(date_shift) {
-    const knex  = strapi.db.connection;
-    const query = knex('shipments').distinct('lot');
-    if (date_shift) query.where('date_shift', date_shift);
+    const knex = strapi.db.connection;
+    const query = knex("shipments").distinct("lot");
+    if (date_shift) query.where("date_shift", date_shift);
 
     const results = await query;
-    return results.map(row => row.lot).filter(Boolean);
+    return results.map((row) => row.lot).filter(Boolean);
   },
 
   // ─────────────────────────────────────────────
@@ -483,11 +648,11 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   async getExportData(date_shift, lot) {
     const whereClause = {};
     if (date_shift) whereClause.date_shift = date_shift;
-    if (lot && lot.toUpperCase() !== 'ALL') whereClause.lot = lot;
+    if (lot && lot.toUpperCase() !== "ALL") whereClause.lot = lot;
 
-    return await strapi.entityService.findMany('api::shipment.shipment', {
+    return await strapi.entityService.findMany("api::shipment.shipment", {
       filters: whereClause,
-      populate: ['finish', 'user'],
+      populate: ["finish", "user"],
     });
   },
 
@@ -495,44 +660,54 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // PENGELUARAN ROM: OVERVIEW & ANALYTICS
   // ─────────────────────────────────────────────
   async overviewRom(startDate, endDate, shift) {
-    if (startDate && typeof startDate !== 'string') throw new Error('Invalid startDate parameter');
-    if (endDate && typeof endDate !== 'string') throw new Error('Invalid endDate parameter');
-    if (shift && typeof shift !== 'string') throw new Error('Invalid shift parameter');
+    if (startDate && typeof startDate !== "string")
+      throw new Error("Invalid startDate parameter");
+    if (endDate && typeof endDate !== "string")
+      throw new Error("Invalid endDate parameter");
+    if (shift && typeof shift !== "string")
+      throw new Error("Invalid shift parameter");
 
     const shipmentWhere = {};
     if (startDate) shipmentWhere.date = { $gte: startDate };
     if (endDate) shipmentWhere.date = { ...shipmentWhere.date, $lte: endDate };
-    if (shift && shift !== 'all') shipmentWhere.shift = shift;
+    if (shift && shift !== "all") shipmentWhere.shift = shift;
 
-    const recentShipments = await strapi.entityService.findMany('api::shipment.shipment', {
-      filters: shipmentWhere,
-      sort: { createdAt: 'desc' },
-      limit: 10,
-      populate: ['finish', 'user']
-    });
+    const recentShipments = await strapi.entityService.findMany(
+      "api::shipment.shipment",
+      {
+        filters: shipmentWhere,
+        sort: { createdAt: "desc" },
+        limit: 10,
+        populate: ["finish", "user"],
+      }
+    );
 
     const summaryWhere = {};
     if (startDate) summaryWhere.date = { $gte: startDate };
     if (endDate) summaryWhere.date = { ...summaryWhere.date, $lte: endDate };
-    if (shift && shift !== 'all') summaryWhere.shift = shift;
+    if (shift && shift !== "all") summaryWhere.shift = shift;
 
-    const summaries = await strapi.entityService.findMany('api::summary.summary', {
-      filters: summaryWhere
-    });
+    const summaries = await strapi.entityService.findMany(
+      "api::summary.summary",
+      {
+        filters: summaryWhere,
+      }
+    );
 
     let totalTonnage = 0;
     let totalRitase = 0;
     let totalCrushed = 0;
     let totalUncrushed = 0;
 
-    summaries.forEach(s => {
-      totalTonnage += (s.total_net_weight || 0);
-      totalRitase += (s.total_shipment || 0);
-      if (s.coal_type === 'CRUSHED') totalCrushed += (s.total_net_weight || 0);
-      if (s.coal_type === 'UNCRUSHED') totalUncrushed += (s.total_net_weight || 0);
+    summaries.forEach((s) => {
+      totalTonnage += s.total_net_weight || 0;
+      totalRitase += s.total_shipment || 0;
+      if (s.coal_type === "CRUSHED") totalCrushed += s.total_net_weight || 0;
+      if (s.coal_type === "UNCRUSHED")
+        totalUncrushed += s.total_net_weight || 0;
     });
 
-    const formattedRecent = recentShipments.map(item => ({
+    const formattedRecent = recentShipments.map((item) => ({
       id: item.id,
       no_do: item.no_do,
       coal_type: item.coal_type,
@@ -544,7 +719,7 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
       dumping: item.dumping,
       username: item.user?.username || null,
       net_weight: item.net_weight,
-      finish: item.finish ? { status: item.finish.status } : null
+      finish: item.finish ? { status: item.finish.status } : null,
     }));
 
     return {
@@ -552,74 +727,96 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
         totalTonnage: Math.round(totalTonnage * 100) / 100,
         totalRitase,
         totalCrushed: Math.round(totalCrushed * 100) / 100,
-        totalUncrushed: Math.round(totalUncrushed * 100) / 100
+        totalUncrushed: Math.round(totalUncrushed * 100) / 100,
       },
-      recentShipments: formattedRecent
+      recentShipments: formattedRecent,
     };
   },
 
   async analyticsRom(startDate, endDate, shift, view) {
-    if (startDate && typeof startDate !== 'string') throw new Error('Invalid startDate parameter');
-    if (endDate && typeof endDate !== 'string') throw new Error('Invalid endDate parameter');
-    if (shift && typeof shift !== 'string') throw new Error('Invalid shift parameter');
-    
-    const isHourly = view === 'hourly';
+    if (startDate && typeof startDate !== "string")
+      throw new Error("Invalid startDate parameter");
+    if (endDate && typeof endDate !== "string")
+      throw new Error("Invalid endDate parameter");
+    if (shift && typeof shift !== "string")
+      throw new Error("Invalid shift parameter");
+
+    const isHourly = view === "hourly";
     const chartMap = {};
 
     if (isHourly) {
       const shipmentWhere = {};
       if (startDate) shipmentWhere.date = { $gte: startDate };
-      if (endDate) shipmentWhere.date = { ...shipmentWhere.date, $lte: endDate };
+      if (endDate)
+        shipmentWhere.date = { ...shipmentWhere.date, $lte: endDate };
       if (!startDate && !endDate) {
         const today = formatYmd(new Date());
         shipmentWhere.date = { $gte: today, $lte: today };
       }
-      if (shift && shift !== 'all') shipmentWhere.shift = shift;
+      if (shift && shift !== "all") shipmentWhere.shift = shift;
 
-      const shipments = await strapi.entityService.findMany('api::shipment.shipment', {
-        filters: shipmentWhere,
-        fields: ['time', 'net_weight', 'coal_type']
-      });
-
-      shipments.forEach(s => {
-        if (!s.time) return;
-        const hourLabel = String(s.time).substring(0, 2) + ':00';
-        if (!chartMap[hourLabel]) {
-          chartMap[hourLabel] = { label: hourLabel, Tonase: 0, Ritase: 0, Crushed: 0, Uncrushed: 0 };
+      const shipments = await strapi.entityService.findMany(
+        "api::shipment.shipment",
+        {
+          filters: shipmentWhere,
+          fields: ["time", "net_weight", "coal_type"],
         }
-        const tonase = (s.net_weight || 0);
+      );
+
+      shipments.forEach((s) => {
+        if (!s.time) return;
+        const hourLabel = String(s.time).substring(0, 2) + ":00";
+        if (!chartMap[hourLabel]) {
+          chartMap[hourLabel] = {
+            label: hourLabel,
+            Tonase: 0,
+            Ritase: 0,
+            Crushed: 0,
+            Uncrushed: 0,
+          };
+        }
+        const tonase = s.net_weight || 0;
         chartMap[hourLabel].Tonase += tonase;
         chartMap[hourLabel].Ritase += 1;
-        if (s.coal_type === 'CRUSHED') chartMap[hourLabel].Crushed += tonase;
-        if (s.coal_type === 'UNCRUSHED') chartMap[hourLabel].Uncrushed += tonase;
+        if (s.coal_type === "CRUSHED") chartMap[hourLabel].Crushed += tonase;
+        if (s.coal_type === "UNCRUSHED")
+          chartMap[hourLabel].Uncrushed += tonase;
       });
-
     } else {
       const summaryWhere = {};
       if (startDate) summaryWhere.date = { $gte: startDate };
       if (endDate) summaryWhere.date = { ...summaryWhere.date, $lte: endDate };
-      if (shift && shift !== 'all') summaryWhere.shift = shift;
+      if (shift && shift !== "all") summaryWhere.shift = shift;
 
-      const summaries = await strapi.entityService.findMany('api::summary.summary', {
-        filters: summaryWhere
-      });
-
-      summaries.forEach(s => {
-        if (!s.date) return;
-        const lbl = s.date; 
-        if (!chartMap[lbl]) {
-          chartMap[lbl] = { label: lbl, Tonase: 0, Ritase: 0, Crushed: 0, Uncrushed: 0 };
+      const summaries = await strapi.entityService.findMany(
+        "api::summary.summary",
+        {
+          filters: summaryWhere,
         }
-        const tonase = (s.total_net_weight || 0);
+      );
+
+      summaries.forEach((s) => {
+        if (!s.date) return;
+        const lbl = s.date;
+        if (!chartMap[lbl]) {
+          chartMap[lbl] = {
+            label: lbl,
+            Tonase: 0,
+            Ritase: 0,
+            Crushed: 0,
+            Uncrushed: 0,
+          };
+        }
+        const tonase = s.total_net_weight || 0;
         chartMap[lbl].Tonase += tonase;
-        chartMap[lbl].Ritase += (s.total_shipment || 0);
-        if (s.coal_type === 'CRUSHED') chartMap[lbl].Crushed += tonase;
-        if (s.coal_type === 'UNCRUSHED') chartMap[lbl].Uncrushed += tonase;
+        chartMap[lbl].Ritase += s.total_shipment || 0;
+        if (s.coal_type === "CRUSHED") chartMap[lbl].Crushed += tonase;
+        if (s.coal_type === "UNCRUSHED") chartMap[lbl].Uncrushed += tonase;
       });
     }
 
     const sortedKeys = Object.keys(chartMap).sort();
-    return sortedKeys.map(k => ({
+    return sortedKeys.map((k) => ({
       ...chartMap[k],
       Tonase: Math.round(chartMap[k].Tonase * 100) / 100,
       Crushed: Math.round((chartMap[k].Crushed || 0) * 100) / 100,
@@ -631,54 +828,71 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
   // PENERIMAAN SDJ: OVERVIEW & ANALYTICS
   // ─────────────────────────────────────────────
   async overviewSdj(startDate, endDate, shift) {
-    if (startDate && typeof startDate !== 'string') throw new Error('Invalid startDate parameter');
-    if (endDate && typeof endDate !== 'string') throw new Error('Invalid endDate parameter');
-    if (shift && typeof shift !== 'string') throw new Error('Invalid shift parameter');
+    if (startDate && typeof startDate !== "string")
+      throw new Error("Invalid startDate parameter");
+    if (endDate && typeof endDate !== "string")
+      throw new Error("Invalid endDate parameter");
+    if (shift && typeof shift !== "string")
+      throw new Error("Invalid shift parameter");
 
     const shipmentWhere = {
-      finish: { status: 'FINISH' }
+      finish: { status: "FINISH" },
     };
     if (startDate) shipmentWhere.finish.date = { $gte: startDate };
-    if (endDate) shipmentWhere.finish.date = { ...(shipmentWhere.finish.date || {}), $lte: endDate };
-    if (shift && shift !== 'all') shipmentWhere.shift = shift;
+    if (endDate)
+      shipmentWhere.finish.date = {
+        ...(shipmentWhere.finish.date || {}),
+        $lte: endDate,
+      };
+    if (shift && shift !== "all") shipmentWhere.shift = shift;
 
-    const recentShipments = await strapi.entityService.findMany('api::shipment.shipment', {
-      filters: shipmentWhere,
-      sort: { createdAt: 'desc' },
-      limit: 10,
-      populate: ['finish', 'user']
-    });
+    const recentShipments = await strapi.entityService.findMany(
+      "api::shipment.shipment",
+      {
+        filters: shipmentWhere,
+        sort: { createdAt: "desc" },
+        limit: 10,
+        populate: ["finish", "user"],
+      }
+    );
 
     const summaryWhere = {};
     if (startDate) summaryWhere.date = { $gte: startDate };
     if (endDate) summaryWhere.date = { ...summaryWhere.date, $lte: endDate };
-    if (shift && shift !== 'all') summaryWhere.shift = shift;
+    if (shift && shift !== "all") summaryWhere.shift = shift;
 
-    const summaries = await strapi.entityService.findMany('api::summary.summary', {
-      filters: summaryWhere
-    });
+    const summaries = await strapi.entityService.findMany(
+      "api::summary.summary",
+      {
+        filters: summaryWhere,
+      }
+    );
 
     let totalFinishRitase = 0;
-    summaries.forEach(s => {
-      totalFinishRitase += (s.total_finish || 0);
+    summaries.forEach((s) => {
+      totalFinishRitase += s.total_finish || 0;
     });
 
-    const sdjAggShipments = await strapi.entityService.findMany('api::shipment.shipment', {
-      filters: shipmentWhere,
-      fields: ['net_weight'],
-      populate: ['finish']
-    });
+    const sdjAggShipments = await strapi.entityService.findMany(
+      "api::shipment.shipment",
+      {
+        filters: shipmentWhere,
+        fields: ["net_weight"],
+        populate: ["finish"],
+      }
+    );
     let sdjTonase = 0;
     let totalDuration = 0;
 
-    sdjAggShipments.forEach(s => {
-      sdjTonase += (s.net_weight || 0);
+    sdjAggShipments.forEach((s) => {
+      sdjTonase += s.net_weight || 0;
       if (s.finish?.duration) totalDuration += s.finish.duration;
     });
 
-    const avgDurationMins = totalFinishRitase > 0 ? (totalDuration / totalFinishRitase) : 0;
+    const avgDurationMins =
+      totalFinishRitase > 0 ? totalDuration / totalFinishRitase : 0;
 
-    const formattedRecent = recentShipments.map(item => ({
+    const formattedRecent = recentShipments.map((item) => ({
       id: item.id,
       no_do: item.no_do,
       coal_type: item.coal_type,
@@ -691,109 +905,301 @@ module.exports = createCoreService('api::shipment.shipment', ({ strapi }) => ({
       username: item.user?.username || null,
       net_weight: item.net_weight,
       duration: item.finish?.duration ?? 0,
-      status: item.finish?.status || 'FINISH',
-      finish: item.finish ? { status: item.finish.status, duration: item.finish.duration } : null
+      status: item.finish?.status || "FINISH",
+      finish: item.finish
+        ? { status: item.finish.status, duration: item.finish.duration }
+        : null,
     }));
 
     return {
       analytics: {
         totalTonnage: Math.round(sdjTonase * 100) / 100,
         totalRitase: totalFinishRitase,
-        avgDurationMins: Math.round(avgDurationMins * 10) / 10
+        avgDurationMins: Math.round(avgDurationMins * 10) / 10,
       },
-      recentShipments: formattedRecent
+      recentShipments: formattedRecent,
     };
   },
 
   async analyticsSdj(startDate, endDate, shift, view) {
-    if (startDate && typeof startDate !== 'string') throw new Error('Invalid startDate parameter');
-    if (endDate && typeof endDate !== 'string') throw new Error('Invalid endDate parameter');
-    if (shift && typeof shift !== 'string') throw new Error('Invalid shift parameter');
+    if (startDate && typeof startDate !== "string")
+      throw new Error("Invalid startDate parameter");
+    if (endDate && typeof endDate !== "string")
+      throw new Error("Invalid endDate parameter");
+    if (shift && typeof shift !== "string")
+      throw new Error("Invalid shift parameter");
 
-    const isHourly = view === 'hourly';
+    const isHourly = view === "hourly";
     const chartMap = {};
 
     if (isHourly) {
       const shipmentWhere = {
-        finish: { status: 'FINISH' }
+        finish: { status: "FINISH" },
       };
-      if (shift && shift !== 'all') shipmentWhere.shift = shift;
+      if (shift && shift !== "all") shipmentWhere.shift = shift;
 
       if (startDate || endDate) {
         if (startDate) shipmentWhere.finish.date = { $gte: startDate };
-        if (endDate) shipmentWhere.finish.date = { ...(shipmentWhere.finish.date || {}), $lte: endDate };
+        if (endDate)
+          shipmentWhere.finish.date = {
+            ...(shipmentWhere.finish.date || {}),
+            $lte: endDate,
+          };
       } else {
         const today = formatYmd(new Date());
         shipmentWhere.finish.date = { $gte: today, $lte: today };
       }
 
-      const shipments = await strapi.entityService.findMany('api::shipment.shipment', {
-        filters: shipmentWhere,
-        fields: ['net_weight', 'coal_type'],
-        populate: ['finish']
-      });
-
-      shipments.forEach(s => {
-        if (!s.finish?.time) return;
-        const lbl = String(s.finish.time).substring(0, 2) + ':00';
-        if (!chartMap[lbl]) {
-          chartMap[lbl] = { date: lbl, name: lbl, label: lbl, Tonase: 0, Ritase: 0, Crushed: 0, Uncrushed: 0 };
+      const shipments = await strapi.entityService.findMany(
+        "api::shipment.shipment",
+        {
+          filters: shipmentWhere,
+          fields: ["net_weight", "coal_type"],
+          populate: ["finish"],
         }
-        const tonase = (s.net_weight || 0);
+      );
+
+      shipments.forEach((s) => {
+        if (!s.finish?.time) return;
+        const lbl = String(s.finish.time).substring(0, 2) + ":00";
+        if (!chartMap[lbl]) {
+          chartMap[lbl] = {
+            date: lbl,
+            name: lbl,
+            label: lbl,
+            Tonase: 0,
+            Ritase: 0,
+            Crushed: 0,
+            Uncrushed: 0,
+          };
+        }
+        const tonase = s.net_weight || 0;
         chartMap[lbl].Tonase += tonase;
         chartMap[lbl].Ritase += 1;
-        if (s.coal_type === 'CRUSHED') chartMap[lbl].Crushed += tonase;
-        if (s.coal_type === 'UNCRUSHED') chartMap[lbl].Uncrushed += tonase;
+        if (s.coal_type === "CRUSHED") chartMap[lbl].Crushed += tonase;
+        if (s.coal_type === "UNCRUSHED") chartMap[lbl].Uncrushed += tonase;
       });
     } else {
       const summaryWhere = {};
       if (startDate) summaryWhere.date = { $gte: startDate };
       if (endDate) summaryWhere.date = { ...summaryWhere.date, $lte: endDate };
-      if (shift && shift !== 'all') summaryWhere.shift = shift;
+      if (shift && shift !== "all") summaryWhere.shift = shift;
 
-      const summaries = await strapi.entityService.findMany('api::summary.summary', {
-        filters: summaryWhere,
-      });
+      const summaries = await strapi.entityService.findMany(
+        "api::summary.summary",
+        {
+          filters: summaryWhere,
+        }
+      );
 
-      summaries.forEach(s => {
+      summaries.forEach((s) => {
         if (!s.date) return;
         const lbl = s.date;
         if (!chartMap[lbl]) {
-          chartMap[lbl] = { date: lbl, name: formatMd(lbl), label: lbl, Tonase: 0, Ritase: 0, Crushed: 0, Uncrushed: 0 };
+          chartMap[lbl] = {
+            date: lbl,
+            name: formatMd(lbl),
+            label: lbl,
+            Tonase: 0,
+            Ritase: 0,
+            Crushed: 0,
+            Uncrushed: 0,
+          };
         }
-        chartMap[lbl].Ritase += (s.total_finish || 0);
+        chartMap[lbl].Ritase += s.total_finish || 0;
       });
 
-      const finishWhere = { finish: { status: 'FINISH' } };
+      const finishWhere = { finish: { status: "FINISH" } };
       if (startDate) finishWhere.finish.date = { $gte: startDate };
-      if (endDate) finishWhere.finish.date = { ...(finishWhere.finish.date || {}), $lte: endDate };
-      if (shift && shift !== 'all') finishWhere.shift = shift;
+      if (endDate)
+        finishWhere.finish.date = {
+          ...(finishWhere.finish.date || {}),
+          $lte: endDate,
+        };
+      if (shift && shift !== "all") finishWhere.shift = shift;
 
-      const finishShipments = await strapi.entityService.findMany('api::shipment.shipment', {
-        filters: finishWhere,
-        fields: ['net_weight', 'coal_type'],
-        populate: ['finish'],
-      });
+      const finishShipments = await strapi.entityService.findMany(
+        "api::shipment.shipment",
+        {
+          filters: finishWhere,
+          fields: ["net_weight", "coal_type"],
+          populate: ["finish"],
+        }
+      );
 
-      finishShipments.forEach(s => {
+      finishShipments.forEach((s) => {
         const lbl = s.finish?.date;
         if (!lbl) return;
         if (!chartMap[lbl]) {
-          chartMap[lbl] = { date: lbl, name: formatMd(lbl), label: lbl, Tonase: 0, Ritase: 0, Crushed: 0, Uncrushed: 0 };
+          chartMap[lbl] = {
+            date: lbl,
+            name: formatMd(lbl),
+            label: lbl,
+            Tonase: 0,
+            Ritase: 0,
+            Crushed: 0,
+            Uncrushed: 0,
+          };
         }
-        const tonase = (s.net_weight || 0);
+        const tonase = s.net_weight || 0;
         chartMap[lbl].Tonase += tonase;
-        if (s.coal_type === 'CRUSHED') chartMap[lbl].Crushed += tonase;
-        if (s.coal_type === 'UNCRUSHED') chartMap[lbl].Uncrushed += tonase;
+        if (s.coal_type === "CRUSHED") chartMap[lbl].Crushed += tonase;
+        if (s.coal_type === "UNCRUSHED") chartMap[lbl].Uncrushed += tonase;
       });
     }
 
     const sortedKeys = Object.keys(chartMap).sort();
-    return sortedKeys.map(k => ({
+    return sortedKeys.map((k) => ({
       ...chartMap[k],
       Tonase: Math.round(chartMap[k].Tonase * 100) / 100,
       Crushed: Math.round((chartMap[k].Crushed || 0) * 100) / 100,
       Uncrushed: Math.round((chartMap[k].Uncrushed || 0) * 100) / 100,
     }));
-  }
+  },
+
+  // ─────────────────────────────────────────────
+  // GET ALL ROM — custom read endpoint (flat, normalized response)
+  // GET /shipments/all-rom
+  // ─────────────────────────────────────────────
+  async getAllRom({
+    page = 1,
+    limit = 100,
+    startDate,
+    endDate,
+    shift,
+    search,
+  } = {}) {
+    const pageSize = limit === "All" ? 1000 : parseInt(limit, 10) || 100;
+    const pageNum = parseInt(page, 10) || 1;
+
+    const filters = {};
+    if (startDate)
+      filters.date_shift = { ...(filters.date_shift || {}), $gte: startDate };
+    if (endDate)
+      filters.date_shift = { ...(filters.date_shift || {}), $lte: endDate };
+    if (shift && shift !== "all") filters.shift = parseInt(shift, 10);
+    if (search) {
+      filters.$or = [
+        { no_do: { $containsi: search } },
+        { hull_no: { $containsi: search } },
+        { lot: { $containsi: search } },
+      ];
+    }
+
+    const [shipments, total] = await Promise.all([
+      strapi.entityService.findMany("api::shipment.shipment", {
+        filters,
+        populate: {
+          finish: { populate: ["foto_seal_finish"] },
+          user: true,
+          foto_seal_start: true,
+        },
+        sort: { createdAt: "desc" },
+        start: (pageNum - 1) * pageSize,
+        limit: pageSize,
+      }),
+      strapi.entityService.count("api::shipment.shipment", { filters }),
+    ]);
+
+    const data = shipments.map((s) => _flattenShipment(s));
+    return { data, total, page: pageNum, pageSize };
+  },
+
+  // ─────────────────────────────────────────────
+  // GET ALL SDJ — custom read endpoint (flat, normalized response)
+  // GET /shipments/all-sdj  (hanya status FINISH + IN_TRANSIT)
+  // ─────────────────────────────────────────────
+  async getAllSdj({
+    page = 1,
+    limit = 100,
+    startDate,
+    endDate,
+    shift,
+    search,
+  } = {}) {
+    const pageSize = limit === "All" ? 1000 : parseInt(limit, 10) || 100;
+    const pageNum = parseInt(page, 10) || 1;
+
+    // SDJ hanya menampilkan pengiriman yang sudah ter-match SJB (punya no_do)
+    const filters = { no_do: { $notNull: true } };
+    if (startDate)
+      filters.date_shift = { ...(filters.date_shift || {}), $gte: startDate };
+    if (endDate)
+      filters.date_shift = { ...(filters.date_shift || {}), $lte: endDate };
+    if (shift && shift !== "all") filters.shift = parseInt(shift, 10);
+    if (search) {
+      filters.$or = [
+        { no_do: { $containsi: search } },
+        { hull_no: { $containsi: search } },
+        { lot: { $containsi: search } },
+      ];
+    }
+
+    const [shipments, total] = await Promise.all([
+      strapi.entityService.findMany("api::shipment.shipment", {
+        filters,
+        populate: {
+          finish: { populate: ["foto_seal_finish"] },
+          user: true,
+          foto_seal_start: true,
+        },
+        sort: { createdAt: "desc" },
+        start: (pageNum - 1) * pageSize,
+        limit: pageSize,
+      }),
+      strapi.entityService.count("api::shipment.shipment", { filters }),
+    ]);
+
+    const data = shipments.map((s) => _flattenShipment(s));
+    return { data, total, page: pageNum, pageSize };
+  },
 }));
+
+// ── Helper: flatten shipment entity → plain object ────────────────────────────
+function _flattenShipment(s) {
+  const finish = s.finish || {};
+  const fotoStart = s.foto_seal_start || null;
+  const fotoFinish = finish.foto_seal_finish || null;
+  return {
+    id: s.id,
+    no_do: s.no_do ?? null,
+    coal_type: s.coal_type ?? null,
+    date: s.date ?? null,
+    time: s.time ?? null,
+    shift: s.shift ?? null,
+    date_shift: s.date_shift ?? null,
+    hull_no: s.hull_no ?? null,
+    seal_no: s.seal_no ?? null,
+    lot: s.lot ?? null,
+    loading: s.loading ?? null,
+    dumping: s.dumping ?? null,
+    net_weight: s.net_weight ?? null,
+    createdAt: s.createdAt,
+    // user adalah relasi many → entityService mengembalikan array
+    user: (Array.isArray(s.user) ? s.user[0] : s.user)?.username ?? null,
+    foto_seal_start: fotoStart
+      ? {
+          id: fotoStart.id,
+          url: fotoStart.url,
+          name: fotoStart.name,
+          thumbnail: fotoStart.formats?.thumbnail?.url ?? null,
+        }
+      : null,
+    finish: {
+      id: finish.id ?? null,
+      status: finish.status ?? "IN_TRANSIT",
+      date: finish.date ?? null,
+      time: finish.time ?? null,
+      shift: finish.shift ?? null,
+      date_shift: finish.date_shift ?? null,
+      duration: finish.duration ?? null,
+      foto_seal_finish: fotoFinish
+        ? {
+            id: fotoFinish.id,
+            url: fotoFinish.url,
+            name: fotoFinish.name,
+          }
+        : null,
+    },
+  };
+}

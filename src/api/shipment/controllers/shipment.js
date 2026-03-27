@@ -264,5 +264,35 @@ module.exports = createCoreController('api::shipment.shipment', ({ strapi }) => 
     } catch (err) {
       return ctx.badRequest(err.message);
     }
-  }
+  },
+
+  // ─────────────────────────────────────────────
+  // GET ALL ROM — custom flat read endpoint
+  // ─────────────────────────────────────────────
+  async getAllRom(ctx) {
+    try {
+      const { page, limit, startDate, endDate, shift, search } = ctx.query;
+      const result = await strapi.service('api::shipment.shipment').getAllRom({
+        page, limit, startDate, endDate, shift, search,
+      });
+      return result;
+    } catch (err) {
+      return ctx.badRequest(err.message);
+    }
+  },
+
+  // ─────────────────────────────────────────────
+  // GET ALL SDJ — custom flat read endpoint
+  // ─────────────────────────────────────────────
+  async getAllSdj(ctx) {
+    try {
+      const { page, limit, startDate, endDate, shift, search } = ctx.query;
+      const result = await strapi.service('api::shipment.shipment').getAllSdj({
+        page, limit, startDate, endDate, shift, search,
+      });
+      return result;
+    } catch (err) {
+      return ctx.badRequest(err.message);
+    }
+  },
 }));

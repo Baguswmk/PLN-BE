@@ -1,20 +1,27 @@
 'use strict';
 
-module.exports = {
-  /**
-   * An asynchronous register function that runs before
-   * your application is initialized.
-   *
-   * This gives you an opportunity to extend code.
-   */
-  register(/*{ strapi }*/) {},
+const fs = require('fs');
 
-  /**
-   * An asynchronous bootstrap function that runs before
-   * your application gets started.
-   *
-   * This gives you an opportunity to set up your data model,
-   * run jobs, or perform some special logic.
-   */
+const _originalUnlink = fs.unlink.bind(fs);
+const _unlinkWithRetry = (path, callback, retries = 3) => {
+  _originalUnlink(path, (err) => {
+    if (err && err.code === 'EBUSY' && retries > 0) {
+      setTimeout(() => _unlinkWithRetry(path, callback, retries - 1), 100 * (4 - retries));
+    } else {
+      // Jika tetap EBUSY setelah semua retry, abaikan saja (file sementara akan dibersihkan OS)
+      if (err && err.code !== 'EBUSY' && err.code !== 'ENOENT') {
+        callback(err);
+      } else {
+        callback(null);
+      }
+    }
+  });
+};
+fs.unlink = (path, callback) => _unlinkWithRetry(path, callback);
+// ─────────────────────────────────────────────────────────────────────────────
+
+module.exports = {
+  register(/*{ strapi }*/) {},
   bootstrap(/*{ strapi }*/) {},
 };
+
