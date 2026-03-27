@@ -10,26 +10,39 @@ const { REVERSE_TRANSPORTIR_CODE, formatYmd, formatMd } = require('../../../util
 
 /**
  * Parse QR Code (no_do) dan extract data: coal_type, loading, net_weight, hull_no
+ * @throws {Error} jika format QR tidak valid
  */
 function parseQRCode(qr) {
+  // ── Validasi input ────────────────────────────────────────────────────────
+  if (!qr || typeof qr !== 'string') {
+    throw new Error('QR code tidak valid: input kosong atau bukan string.');
+  }
+  const trimmed = qr.trim();
+  if (trimmed.length < 20) {
+    throw new Error(`QR code tidak valid: panjang ${trimmed.length} karakter, minimal 20.`);
+  }
+  if (/\s/.test(trimmed)) {
+    throw new Error('QR code tidak valid: mengandung spasi atau karakter whitespace.');
+  }
+
   const result = {};
 
-  const cType = qr.charAt(5);
+  const cType = trimmed.charAt(5);
   if (cType === 'C') result.coal_type = 'CRUSHED';
   else if (cType === 'U') result.coal_type = 'UNCRUSHED';
 
-  const lType = qr.charAt(10);
+  const lType = trimmed.charAt(10);
   if (lType === 'W') result.loading = 'MTB - STOCK TS WESTHAM';
   else if (lType === 'E') result.loading = 'MTB - SP Giok Ext';
   else if (lType === 'L') result.loading = 'MTB - SP Lavender';
 
-  const nwStr = qr.substring(11, 15);
+  const nwStr = trimmed.substring(11, 15);
   const netWeightParsed = parseInt(nwStr, 10);
   if (!isNaN(netWeightParsed)) {
     result.net_weight = netWeightParsed / 100;
   }
 
-  const remainder = qr.substring(15);
+  const remainder = trimmed.substring(15);
   const match = remainder.match(/^([a-zA-Z]+)(.*)$/);
   if (match) {
     const codeChar = match[1].toUpperCase();
@@ -37,8 +50,8 @@ function parseQRCode(qr) {
     const transportirPrefix = REVERSE_TRANSPORTIR_CODE[codeChar] || codeChar;
     result.hull_no = transportirPrefix + angkaAkhir;
   } else {
-    const transportirCodeChar = qr.charAt(15);
-    const angkaAkhir = qr.substring(16, 21);
+    const transportirCodeChar = trimmed.charAt(15);
+    const angkaAkhir = trimmed.substring(16, 21);
     const transportirPrefix = REVERSE_TRANSPORTIR_CODE[transportirCodeChar] || transportirCodeChar;
     result.hull_no = transportirPrefix + angkaAkhir;
   }

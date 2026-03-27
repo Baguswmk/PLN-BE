@@ -65,11 +65,11 @@ module.exports = [
   {
     name: "strapi::body",
     config: {
-      formLimit: "20mb",
-      jsonLimit: "20mb",
-      textLimit: "20mb",
+      formLimit: "5mb",
+      jsonLimit: "256kb",
+      textLimit: "256kb",
       formidable: {
-        maxFileSize: 500 * 1024 * 1024,
+        maxFileSize: 10 * 1024 * 1024, // 10MB — foto sudah dikompress ke ~300KB di FE
       },
     },
   },
